@@ -8,6 +8,7 @@ import time
 import os
 import platform
 import socket
+import ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -26,11 +27,11 @@ MAX_CONFIGS_TO_CHECK = 5000
 SUBSCRIPTION_COUNT = 1
 USE_TCP = True
 USE_PING = True
+USE_TLS = False       # TLS-проверка (SSL-рукопожатие)
 
 # Режим работы: "normal" или "white"
-MODE = "normal"   # normal - все источники, white - только для белых списков
+MODE = "normal"
 
-# Источники конфигов
 SOURCES_ALL = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
@@ -42,7 +43,6 @@ SOURCES_ALL = [
     "https://raw.githubusercontent.com/youfoundamin/V2rayCollector/main/vless_iran.txt",
 ]
 
-# Источники только для белых списков (CIDR, Reality с белыми IP)
 SOURCES_WHITE = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
@@ -186,6 +186,20 @@ def check_tcp(host, port):
     except:
         return False
 
+def check_tls(host, port):
+    """Проверяет TLS-рукопожатие (SSL)"""
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=TCP_TIMEOUT) as sock:
+            with context.wrap_socket(sock, server_hostname=host) as ssock:
+                # Получаем сертификат, чтобы убедиться, что TLS-рукопожатие прошло
+                cert = ssock.getpeercert()
+                if cert:
+                    return True
+                return False
+    except:
+        return False
+
 def check_ping(host):
     try:
         system = platform.system()
@@ -208,10 +222,17 @@ def check_single_config(config):
     if not host:
         return config, None
     
+    # TCP проверка
     if USE_TCP:
         if not check_tcp(host, port):
             return config, None
     
+    # TLS проверка (если включена)
+    if USE_TLS:
+        if not check_tls(host, port):
+            return config, None
+    
+    # Ping проверка (если включена)
     if USE_PING:
         ping = check_ping(host)
         return config, ping
@@ -272,8 +293,9 @@ def show_header():
     mode_text = "Белые списки" if MODE == "white" else "Обычный"
     tcp_status = "ВКЛ" if USE_TCP else "ВЫКЛ"
     ping_status = "ВКЛ" if USE_PING else "ВЫКЛ"
-    print(f"  Режим: {mode_text} | TCP={TCP_TIMEOUT}с, Ping={PING_TIMEOUT}с, потоки={MAX_WORKERS}, лимит={MAX_CONFIGS_TO_CHECK}")
-    print(f"  TCP: {tcp_status}, Ping: {ping_status}, серверов в подписке: {SUBSCRIPTION_COUNT}")
+    tls_status = "ВКЛ" if USE_TLS else "ВЫКЛ"
+    print(f"  Режим: {mode_text} | TCP={TCP_TIMEOUT}с, Ping={PING_TIMEOUT}с, TLS={tls_status}")
+    print(f"  TCP: {tcp_status}, Ping: {ping_status}, TLS: {tls_status}, серверов в подписке: {SUBSCRIPTION_COUNT}")
     print("=" * 75)
     print(f"  Файлы сохраняются в: {DOWNLOADS}")
     print(f"  Источников: {len(SOURCES_WHITE) if MODE=='white' else len(SOURCES_ALL)}")
@@ -290,7 +312,7 @@ def show_results(results, total_checked, total_available):
     if USE_PING:
         print(f"  Самый быстрый пинг: {results[0][1]:.0f} мс")
     else:
-        print("  Ping отключен, отображены все прошедшие TCP")
+        print("  Ping отключен, отображены все прошедшие TCP/TLS")
     print(f"  Проверено: {total_checked} из {total_available} доступных (лимит {MAX_CONFIGS_TO_CHECK})")
     print("=" * 75)
     print(f"\nТоп-{min(SUBSCRIPTION_COUNT, len(results))} конфигов сохранены в подписку.")
@@ -300,7 +322,7 @@ def show_results(results, total_checked, total_available):
         if USE_PING:
             print(f"  {i:>2}. пинг: {ping:>5.0f} мс")
         else:
-            print(f"  {i:>2}. TCP OK")
+            print(f"  {i:>2}. TCP/TLS OK")
         print(f"      {short}")
         print()
     
@@ -330,7 +352,7 @@ def run_search():
         log_message(f"Проверяем все {total_available} конфигов")
     
     total = len(configs_to_check)
-    log_message(f"Проверяем {total} конфигов (TCP={USE_TCP}, Ping={USE_PING})...")
+    log_message(f"Проверяем {total} конфигов (TCP={USE_TCP}, TLS={USE_TLS}, Ping={USE_PING})...")
     print("Прогресс обновляется после каждого конфига:\n")
     
     results = []
@@ -351,14 +373,14 @@ def run_search():
                 if USE_PING:
                     status = f"OK {ping:.0f}мс"
                 else:
-                    status = "TCP OK"
+                    status = "TCP/TLS OK"
             else:
                 host, port = extract_host_and_port_from_config(config)
                 if host and check_tcp(host, port):
                     tcp_ok += 1
-                    status = "TCP OK, ping нет"
+                    status = "TCP OK, дальше нет"
                 else:
-                    status = "TCP/ping нет"
+                    status = "TCP/TLS нет"
             
             percent = (checked / total) * 100
             elapsed = time.time() - start_ping
@@ -372,7 +394,7 @@ def run_search():
             print(f"\r  [{checked}/{total}] ({percent:.1f}%) {status}  {eta}   ", end='', flush=True)
     
     print()
-    log_message(f"Проверка завершена. TCP прошли: {tcp_ok}, всего результатов: {len(results)}")
+    log_message(f"Проверка завершена. Всего результатов: {len(results)}")
     
     if USE_PING:
         results.sort(key=lambda x: x[1])
@@ -395,23 +417,27 @@ def run_search():
         return False
 
 def show_settings():
-    global TCP_TIMEOUT, PING_TIMEOUT, MAX_WORKERS, MAX_CONFIGS_TO_CHECK, USE_TCP, USE_PING, SUBSCRIPTION_COUNT, MODE
+    global TCP_TIMEOUT, PING_TIMEOUT, MAX_WORKERS, MAX_CONFIGS_TO_CHECK, USE_TCP, USE_PING, USE_TLS, SUBSCRIPTION_COUNT, MODE
     clear_screen()
     print("=" * 75)
     print("  НАСТРОЙКИ")
     print("=" * 75)
     mode_text = "Белые списки" if MODE == "white" else "Обычный"
+    tcp_status = "ВКЛ" if USE_TCP else "ВЫКЛ"
+    ping_status = "ВКЛ" if USE_PING else "ВЫКЛ"
+    tls_status = "ВКЛ" if USE_TLS else "ВЫКЛ"
     print(f"  1. TCP таймаут          : {TCP_TIMEOUT} сек")
     print(f"  2. Ping таймаут         : {PING_TIMEOUT} сек")
     print(f"  3. Количество потоков   : {MAX_WORKERS}")
     print(f"  4. Лимит конфигов       : {MAX_CONFIGS_TO_CHECK}")
     print(f"  5. Серверов в подписке  : {SUBSCRIPTION_COUNT}")
-    print(f"  6. TCP проверка         : {'ВКЛ' if USE_TCP else 'ВЫКЛ'}")
-    print(f"  7. Ping проверка        : {'ВКЛ' if USE_PING else 'ВЫКЛ'}")
-    print(f"  8. Режим работы         : {mode_text}")
-    print("  9. Вернуться в главное меню")
+    print(f"  6. TCP проверка         : {tcp_status}")
+    print(f"  7. TLS проверка         : {tls_status}")
+    print(f"  8. Ping проверка        : {ping_status}")
+    print(f"  9. Режим работы         : {mode_text}")
+    print("  10. Вернуться в главное меню")
     print("=" * 75)
-    choice = input("\nВыбери параметр для изменения (1-9): ").strip()
+    choice = input("\nВыбери параметр для изменения (1-10): ").strip()
     
     if choice == '1':
         try:
@@ -479,11 +505,16 @@ def show_settings():
         input("\nНажми Enter для продолжения...")
         show_settings()
     elif choice == '7':
+        USE_TLS = not USE_TLS
+        print(f"TLS проверка теперь {'ВКЛ' if USE_TLS else 'ВЫКЛ'}")
+        input("\nНажми Enter для продолжения...")
+        show_settings()
+    elif choice == '8':
         USE_PING = not USE_PING
         print(f"Ping проверка теперь {'ВКЛ' if USE_PING else 'ВЫКЛ'}")
         input("\nНажми Enter для продолжения...")
         show_settings()
-    elif choice == '8':
+    elif choice == '9':
         if MODE == "normal":
             MODE = "white"
             print("Режим переключён на 'Белые списки'")
@@ -492,7 +523,7 @@ def show_settings():
             print("Режим переключён на 'Обычный'")
         input("\nНажми Enter для продолжения...")
         show_settings()
-    elif choice == '9':
+    elif choice == '10':
         return
     else:
         print("Неверный выбор")
@@ -517,8 +548,9 @@ def show_menu():
     mode_text = "Белые списки" if MODE == "white" else "Обычный"
     tcp_status = "ВКЛ" if USE_TCP else "ВЫКЛ"
     ping_status = "ВКЛ" if USE_PING else "ВЫКЛ"
-    print(f"  Режим: {mode_text} | TCP={TCP_TIMEOUT}с, Ping={PING_TIMEOUT}с, потоки={MAX_WORKERS}, лимит={MAX_CONFIGS_TO_CHECK}")
-    print(f"  TCP: {tcp_status}, Ping: {ping_status}, серверов в подписке: {SUBSCRIPTION_COUNT}")
+    tls_status = "ВКЛ" if USE_TLS else "ВЫКЛ"
+    print(f"  Режим: {mode_text} | TCP={TCP_TIMEOUT}с, Ping={PING_TIMEOUT}с, TLS={tls_status}")
+    print(f"  TCP: {tcp_status}, Ping: {ping_status}, TLS: {tls_status}, серверов в подписке: {SUBSCRIPTION_COUNT}")
     print("=" * 75)
     return input("\nВыбери действие (1-7): ").strip()
 
@@ -584,11 +616,9 @@ def clear_logs():
         print(f"\nОшибка: {e}")
 
 def main():
-    # Показываем предупреждение
     if not show_warning():
         return
     
-    # Проверка интернета через сайты из белого списка
     if not check_internet():
         print("Нет интернета! Проверьте подключение.")
         input("\nНажми Enter для выхода...")
