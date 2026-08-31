@@ -12,17 +12,26 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 # ============================================================
+# ВЕРСИЯ (фиксированная)
+# ============================================================
+VERSION = "v1.0"
+
+# ============================================================
 # НАЧАЛЬНЫЕ ЗНАЧЕНИЯ (можно менять через меню)
 # ============================================================
 TCP_TIMEOUT = 1.0
 PING_TIMEOUT = 0.5
 MAX_WORKERS = 40
 MAX_CONFIGS_TO_CHECK = 5000
+SUBSCRIPTION_COUNT = 1
+USE_TCP = True
+USE_PING = True
 
-USE_TCP = True      # включить TCP проверку
-USE_PING = True     # включить Ping проверку
+# Режим работы: "normal" или "white"
+MODE = "normal"   # normal - все источники, white - только для белых списков
 
-SOURCES = [
+# Источники конфигов
+SOURCES_ALL = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
@@ -32,7 +41,61 @@ SOURCES = [
     "https://raw.githubusercontent.com/vlesscollector/vlesscollector/refs/heads/main/vless_configs.txt",
     "https://raw.githubusercontent.com/youfoundamin/V2rayCollector/main/vless_iran.txt",
 ]
+
+# Источники только для белых списков (CIDR, Reality с белыми IP)
+SOURCES_WHITE = [
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
+    "https://solovyov-jenya2004.vercel.app/final_sorted/",
+    "https://solovyov-jenya2004.vercel.app/random/?n=100",
+]
 # ============================================================
+
+def show_warning():
+    """Показывает предупреждение и запрашивает согласие"""
+    print("=" * 75)
+    print("ПРЕДУПРЕЖДЕНИЕ")
+    print("=" * 75)
+    print()
+    print("Данный скрипт предназначен для поиска бесплатных VLESS-конфигов")
+    print("из открытых источников с целью обхода блокировок.")
+    print()
+    print("ВСЕ СЕРВЕРА НЕ ЯВЛЯЮТСЯ МОИМИ, Я НЕ НЕСУ ОТВЕТСТВЕННОСТИ")
+    print("ЗА ИХ РАБОТОСПОСОБНОСТЬ, БЕЗОПАСНОСТЬ ИЛИ ЛЮБЫЕ ДЕЙСТВИЯ,")
+    print("СОВЕРШАЕМЫЕ ЧЕРЕЗ НИХ.")
+    print()
+    print("НЕ ИСПОЛЬЗУЙТЕ ЭТИ СЕРВЕРА ДЛЯ ВХОДА В БАНКИ, ПОЧТУ, GOOGLE")
+    print("ИЛИ ДРУГИЕ СЕРВИСЫ, СОДЕРЖАЩИЕ ЛИЧНЫЕ ДАННЫЕ.")
+    print()
+    print("ВСЕ ДАННЫЕ БЕРУТСЯ ИЗ ОТКРЫТЫХ ИСТОЧНИКОВ.")
+    print("ПРИ ИСПОЛЬЗОВАНИИ ВЫ ПРИНИМАЕТЕ ВСЮ ОТВЕТСТВЕННОСТЬ НА СЕБЯ.")
+    print()
+    print("Если вы нашли ошибку, пишите в Telegram: @Euifj")
+    print("=" * 75)
+    while True:
+        ans = input("\nСогласны ли вы с условиями? (Y/N): ").strip().upper()
+        if ans == 'Y':
+            return True
+        elif ans == 'N':
+            print("Вы отказались. Программа завершается.")
+            return False
+        else:
+            print("Введите Y или N.")
+
+def check_internet():
+    """Проверяет доступ к интернету через сайты из белого списка"""
+    hosts = [
+        "https://www.yandex.ru",
+        "https://www.gosuslugi.ru",
+        "https://www.kremlin.ru"
+    ]
+    for host in hosts:
+        try:
+            requests.get(host, timeout=3)
+            return True
+        except:
+            continue
+    return False
 
 def get_downloads_folder():
     system = platform.system()
@@ -69,11 +132,19 @@ def log_message(msg):
         pass
 
 def get_all_configs_from_sources():
-    log_message(f"Загрузка конфигов из {len(SOURCES)} источников...")
+    """Собирает конфиги в зависимости от режима MODE"""
+    if MODE == "white":
+        sources = SOURCES_WHITE
+        mode_text = "белые списки"
+    else:
+        sources = SOURCES_ALL
+        mode_text = "обычный"
+    
+    log_message(f"Загрузка конфигов из {len(sources)} источников (режим: {mode_text})...")
     all_configs = []
     sources_working = 0
     
-    for i, url in enumerate(SOURCES, 1):
+    for i, url in enumerate(sources, 1):
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             response = requests.get(url, timeout=10, headers=headers)
@@ -84,18 +155,18 @@ def get_all_configs_from_sources():
                 if configs:
                     all_configs.extend(configs)
                     sources_working += 1
-                    print(f"\r  [{i}/{len(SOURCES)}] OK +{len(configs)} (всего: {len(all_configs)})", end='', flush=True)
+                    print(f"\r  [{i}/{len(sources)}] OK +{len(configs)} (всего: {len(all_configs)})", end='', flush=True)
                 else:
-                    print(f"\r  [{i}/{len(SOURCES)}] нет VLESS-конфигов", end='', flush=True)
+                    print(f"\r  [{i}/{len(sources)}] нет VLESS-конфигов", end='', flush=True)
             else:
-                print(f"\r  [{i}/{len(SOURCES)}] HTTP {response.status_code}", end='', flush=True)
+                print(f"\r  [{i}/{len(sources)}] HTTP {response.status_code}", end='', flush=True)
         except Exception as e:
-            print(f"\r  [{i}/{len(SOURCES)}] ошибка", end='', flush=True)
+            print(f"\r  [{i}/{len(sources)}] ошибка", end='', flush=True)
     
     print()
     unique_configs = list(dict.fromkeys(all_configs))
     log_message(f"Собрано {len(all_configs)} конфигов, уникальных: {len(unique_configs)}")
-    log_message(f"Работающих источников: {sources_working}/{len(SOURCES)}")
+    log_message(f"Работающих источников: {sources_working}/{len(sources)}")
     return unique_configs
 
 def extract_host_and_port_from_config(config):
@@ -137,18 +208,15 @@ def check_single_config(config):
     if not host:
         return config, None
     
-    # Проверяем TCP, если включен
     if USE_TCP:
         if not check_tcp(host, port):
             return config, None
     
-    # Проверяем Ping, если включен
     if USE_PING:
         ping = check_ping(host)
         return config, ping
     else:
-        # Если Ping выключен, считаем что конфиг рабочий (только TCP)
-        return config, 999  # ставим фиктивный пинг, чтобы он попал в результаты
+        return config, 999
 
 def save_all_configs(configs):
     try:
@@ -169,12 +237,12 @@ def save_subscription(configs):
     try:
         os.makedirs(os.path.dirname(SUBSCRIPTION_FILE), exist_ok=True)
         with open(SUBSCRIPTION_FILE, 'w', encoding='utf-8') as f:
-            f.write("# VPN Auto-Finder Подписка (топ-10)\n")
+            f.write(f"# VPN Auto-Finder Подписка (топ-{len(configs)})\n")
             f.write(f"# Обновлено: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("# ============================================\n\n")
-            for config in configs[:10]:
+            for config in configs:
                 f.write(config + '\n')
-        log_message(f"Подписка сохранена в {SUBSCRIPTION_FILE}")
+        log_message(f"Подписка сохранена в {SUBSCRIPTION_FILE} (количество серверов: {len(configs)})")
         return True
     except Exception as e:
         log_message(f"Ошибка сохранения подписки: {e}")
@@ -200,14 +268,15 @@ def clear_screen():
 def show_header():
     clear_screen()
     print("=" * 75)
-    print("  Поиск обход белых списков v1.0")
+    print(f"  VPN AUTO-FINDER {VERSION}")
+    mode_text = "Белые списки" if MODE == "white" else "Обычный"
     tcp_status = "ВКЛ" if USE_TCP else "ВЫКЛ"
     ping_status = "ВКЛ" if USE_PING else "ВЫКЛ"
-    print(f"  Настройки: TCP={TCP_TIMEOUT}с, Ping={PING_TIMEOUT}с, потоки={MAX_WORKERS}, лимит={MAX_CONFIGS_TO_CHECK}")
-    print(f"  TCP: {tcp_status}, Ping: {ping_status}")
+    print(f"  Режим: {mode_text} | TCP={TCP_TIMEOUT}с, Ping={PING_TIMEOUT}с, потоки={MAX_WORKERS}, лимит={MAX_CONFIGS_TO_CHECK}")
+    print(f"  TCP: {tcp_status}, Ping: {ping_status}, серверов в подписке: {SUBSCRIPTION_COUNT}")
     print("=" * 75)
     print(f"  Файлы сохраняются в: {DOWNLOADS}")
-    print(f"  Источников: {len(SOURCES)}")
+    print(f"  Источников: {len(SOURCES_WHITE) if MODE=='white' else len(SOURCES_ALL)}")
     print("=" * 75)
     print()
 
@@ -224,7 +293,8 @@ def show_results(results, total_checked, total_available):
         print("  Ping отключен, отображены все прошедшие TCP")
     print(f"  Проверено: {total_checked} из {total_available} доступных (лимит {MAX_CONFIGS_TO_CHECK})")
     print("=" * 75)
-    print("\nТоп-10 конфигов:")
+    print(f"\nТоп-{min(SUBSCRIPTION_COUNT, len(results))} конфигов сохранены в подписку.")
+    print("Показаны первые 10 из них:")
     for i, (config, ping) in enumerate(results[:10], 1):
         short = config[:70] + "..." if len(config) > 70 else config
         if USE_PING:
@@ -235,7 +305,7 @@ def show_results(results, total_checked, total_available):
         print()
     
     print(f"Файлы сохранены в папке Загрузки:")
-    print(f"   Подписка (топ-10): {SUBSCRIPTION_FILE}")
+    print(f"   Подписка (топ-{SUBSCRIPTION_COUNT}): {SUBSCRIPTION_FILE}")
     print(f"   Лучший конфиг:      {BEST_CONFIG_FILE}")
     print(f"   Все конфиги:        {ALL_CONFIGS_FILE}")
     print("=" * 75)
@@ -307,11 +377,11 @@ def run_search():
     if USE_PING:
         results.sort(key=lambda x: x[1])
     else:
-        # если пинг выключен, сортировка не нужна, но оставим как есть
         results.sort(key=lambda x: x[1] if x[1] is not None else 999)
     
     if results:
-        best_configs = [config for config, _ in results[:10]]
+        sub_count = min(SUBSCRIPTION_COUNT, len(results))
+        best_configs = [config for config, _ in results[:sub_count]]
         best_config = results[0][0]
         save_subscription(best_configs)
         save_best_config(best_config)
@@ -325,20 +395,23 @@ def run_search():
         return False
 
 def show_settings():
-    global TCP_TIMEOUT, PING_TIMEOUT, MAX_WORKERS, MAX_CONFIGS_TO_CHECK, USE_TCP, USE_PING
+    global TCP_TIMEOUT, PING_TIMEOUT, MAX_WORKERS, MAX_CONFIGS_TO_CHECK, USE_TCP, USE_PING, SUBSCRIPTION_COUNT, MODE
     clear_screen()
     print("=" * 75)
     print("  НАСТРОЙКИ")
     print("=" * 75)
+    mode_text = "Белые списки" if MODE == "white" else "Обычный"
     print(f"  1. TCP таймаут          : {TCP_TIMEOUT} сек")
     print(f"  2. Ping таймаут         : {PING_TIMEOUT} сек")
     print(f"  3. Количество потоков   : {MAX_WORKERS}")
     print(f"  4. Лимит конфигов       : {MAX_CONFIGS_TO_CHECK}")
-    print(f"  5. TCP проверка         : {'ВКЛ' if USE_TCP else 'ВЫКЛ'}")
-    print(f"  6. Ping проверка        : {'ВКЛ' if USE_PING else 'ВЫКЛ'}")
-    print("  7. Вернуться в главное меню")
+    print(f"  5. Серверов в подписке  : {SUBSCRIPTION_COUNT}")
+    print(f"  6. TCP проверка         : {'ВКЛ' if USE_TCP else 'ВЫКЛ'}")
+    print(f"  7. Ping проверка        : {'ВКЛ' if USE_PING else 'ВЫКЛ'}")
+    print(f"  8. Режим работы         : {mode_text}")
+    print("  9. Вернуться в главное меню")
     print("=" * 75)
-    choice = input("\nВыбери параметр для изменения (1-7): ").strip()
+    choice = input("\nВыбери параметр для изменения (1-9): ").strip()
     
     if choice == '1':
         try:
@@ -389,16 +462,37 @@ def show_settings():
         input("\nНажми Enter для продолжения...")
         show_settings()
     elif choice == '5':
+        try:
+            val = int(input(f"Введите новое количество серверов в подписке (сейчас {SUBSCRIPTION_COUNT}): "))
+            if val >= 1:
+                SUBSCRIPTION_COUNT = val
+                print(f"Количество серверов в подписке установлено на {SUBSCRIPTION_COUNT}")
+            else:
+                print("Значение должно быть не менее 1")
+        except:
+            print("Неверный ввод, должно быть целое число")
+        input("\nНажми Enter для продолжения...")
+        show_settings()
+    elif choice == '6':
         USE_TCP = not USE_TCP
         print(f"TCP проверка теперь {'ВКЛ' if USE_TCP else 'ВЫКЛ'}")
         input("\nНажми Enter для продолжения...")
         show_settings()
-    elif choice == '6':
+    elif choice == '7':
         USE_PING = not USE_PING
         print(f"Ping проверка теперь {'ВКЛ' if USE_PING else 'ВЫКЛ'}")
         input("\nНажми Enter для продолжения...")
         show_settings()
-    elif choice == '7':
+    elif choice == '8':
+        if MODE == "normal":
+            MODE = "white"
+            print("Режим переключён на 'Белые списки'")
+        else:
+            MODE = "normal"
+            print("Режим переключён на 'Обычный'")
+        input("\nНажми Enter для продолжения...")
+        show_settings()
+    elif choice == '9':
         return
     else:
         print("Неверный выбор")
@@ -408,22 +502,23 @@ def show_settings():
 def show_menu():
     clear_screen()
     print("=" * 75)
-    print("  Поиск обход белых списков v1.0")
+    print(f"  VPN AUTO-FINDER {VERSION}")
     print("=" * 75)
     print()
     print("  1. Найти лучшие сервера")
     print("  2. Показать лучший конфиг")
-    print("  3. Показать подписку (топ-10)")
+    print("  3. Показать подписку")
     print("  4. Показать все собранные конфиги")
     print("  5. Настройки")
     print("  6. Очистить лог")
     print("  7. Выход")
     print()
     print("=" * 75)
+    mode_text = "Белые списки" if MODE == "white" else "Обычный"
     tcp_status = "ВКЛ" if USE_TCP else "ВЫКЛ"
     ping_status = "ВКЛ" if USE_PING else "ВЫКЛ"
-    print(f"  Текущие настройки: TCP={TCP_TIMEOUT}с, Ping={PING_TIMEOUT}с, потоки={MAX_WORKERS}, лимит={MAX_CONFIGS_TO_CHECK}")
-    print(f"  TCP: {tcp_status}, Ping: {ping_status}")
+    print(f"  Режим: {mode_text} | TCP={TCP_TIMEOUT}с, Ping={PING_TIMEOUT}с, потоки={MAX_WORKERS}, лимит={MAX_CONFIGS_TO_CHECK}")
+    print(f"  TCP: {tcp_status}, Ping: {ping_status}, серверов в подписке: {SUBSCRIPTION_COUNT}")
     print("=" * 75)
     return input("\nВыбери действие (1-7): ").strip()
 
@@ -447,7 +542,7 @@ def show_subscription():
         if os.path.exists(SUBSCRIPTION_FILE):
             with open(SUBSCRIPTION_FILE, 'r', encoding='utf-8') as f:
                 print("\n" + "=" * 75)
-                print("ПОДПИСКА (топ-10):")
+                print("ПОДПИСКА:")
                 print("=" * 75)
                 print(f.read())
                 print("=" * 75)
@@ -489,10 +584,13 @@ def clear_logs():
         print(f"\nОшибка: {e}")
 
 def main():
-    try:
-        requests.get("https://1.1.1.1", timeout=3)
-    except:
-        print("Нет интернета!")
+    # Показываем предупреждение
+    if not show_warning():
+        return
+    
+    # Проверка интернета через сайты из белого списка
+    if not check_internet():
+        print("Нет интернета! Проверьте подключение.")
         input("\nНажми Enter для выхода...")
         return
     
